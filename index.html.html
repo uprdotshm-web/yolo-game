@@ -1,0 +1,1705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>YOLO</title>
+
+<!-- Pixel arcade font from Google Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================
+   YOLO  —  a 1980s arcade cabinet game about holding
+   ============================================================ */
+
+/* ---------- Colour palette (the whole game uses these) ---------- */
+:root {
+  --black:        #000000;   /* the void */
+  --phosphor:     #33ff66;   /* classic CRT green, chart + UI */
+  --phosphor-dim: #1a7a33;   /* dim green for gridlines / faded text */
+  --red:          #ff3b30;   /* warnings, drawdown, the SELL button */
+  --red-bright:   #ff6b60;   /* red when a crash is tempting you */
+  --amber:        #ffb000;   /* the marquee glow */
+  --cabinet:      #141414;   /* the plastic of the cabinet */
+  --room:         #050505;   /* the dark room the cabinet sits in */
+}
+
+/* ---------- The dark room the cabinet lives in ---------- */
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--room);
+  /* a faint spotlight from above, like a machine in a dark arcade */
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, #1a1a1a 0%, var(--room) 70%);
+  font-family: 'Press Start 2P', monospace;
+  color: var(--phosphor);
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* ---------- The arcade cabinet ---------- */
+#cabinet {
+  position: relative;
+  box-sizing: border-box;
+  width: min(100vw, 560px);
+  height: 100%;
+  max-height: 100vh;
+  margin: 0 auto;
+  padding: 10px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #1c1c1c 0%, #0d0d0d 100%);
+  border-left: 4px solid #000;
+  border-right: 4px solid #000;
+  box-shadow: 0 0 60px rgba(0,0,0,0.9), inset 0 0 40px rgba(0,0,0,0.8);
+}
+
+/* ---------- The amber marquee at the very top ---------- */
+#marquee {
+  text-align: center;
+  color: var(--amber);
+  font-size: clamp(28px, 11vw, 56px);
+  letter-spacing: 6px;
+  padding: 8px 0 10px;
+  text-shadow: 0 0 8px var(--amber), 0 0 22px rgba(255,176,0,0.6);
+  flex-shrink: 0;
+}
+
+/* ---------- The CRT screen inside the cabinet ---------- */
+#screen {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 14px;
+  background: #000;
+  border: 6px solid #0a0a0a;
+  box-shadow:
+    inset 0 0 60px rgba(0,0,0,0.95),
+    inset 0 0 12px rgba(51,255,102,0.08),
+    0 0 2px rgba(51,255,102,0.15);
+  overflow: hidden;
+}
+
+/* CRT scanlines drawn over everything on the screen */
+#screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0,0,0,0) 0px,
+    rgba(0,0,0,0) 2px,
+    rgba(0,0,0,0.28) 3px,
+    rgba(0,0,0,0.28) 4px
+  );
+}
+/* soft vignette / screen curvature glow */
+#screen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 39;
+  border-radius: 14px;
+  box-shadow: inset 0 0 90px rgba(0,0,0,0.9);
+}
+
+/* Each full-screen view stacks in the same place; we show one at a time */
+.view {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  padding: 14px;
+  box-sizing: border-box;
+  z-index: 10;
+}
+.view.active { display: flex; }
+
+/* ============================================================
+   ATTRACT SCREEN
+   ============================================================ */
+#attract {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 22px;
+}
+#attract .big-yolo {
+  color: var(--amber);
+  font-size: clamp(40px, 18vw, 90px);
+  letter-spacing: 8px;
+  text-shadow: 0 0 10px var(--amber), 0 0 30px rgba(255,176,0,0.7);
+}
+.blink {
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
+
+#attract .insert {
+  color: var(--phosphor);
+  font-size: clamp(12px, 4.2vw, 18px);
+  text-shadow: 0 0 8px var(--phosphor);
+}
+.stat-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: clamp(9px, 3vw, 12px);
+  line-height: 1.8;
+  color: var(--phosphor-dim);
+}
+.stat-block .label { color: var(--phosphor-dim); }
+.stat-block .value { color: var(--phosphor); text-shadow: 0 0 6px var(--phosphor); }
+#attract .hint {
+  margin-top: 6px;
+  font-size: clamp(8px, 2.6vw, 10px);
+  color: var(--phosphor-dim);
+}
+
+/* ============================================================
+   GAME SCREEN
+   ============================================================ */
+#game { gap: 8px; }
+
+/* top readouts: multiplier + drawdown + timer */
+#hud {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-shrink: 0;
+}
+#multiplier {
+  font-size: clamp(26px, 9vw, 46px);
+  color: var(--phosphor);
+  text-shadow: 0 0 10px var(--phosphor);
+  line-height: 1;
+}
+/* flash red when a crash is happening */
+#multiplier.crashing {
+  color: var(--red);
+  text-shadow: 0 0 12px var(--red), 0 0 26px rgba(255,59,48,0.6);
+}
+#hud-right {
+  text-align: right;
+  font-size: clamp(9px, 3vw, 12px);
+  line-height: 1.7;
+}
+#drawdown { color: var(--phosphor-dim); }
+#drawdown.under { color: var(--red); text-shadow: 0 0 8px rgba(255,59,48,0.7); }
+#timer { color: var(--phosphor); }
+
+/* the chart container — we shake THIS during crashes */
+#chart-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 2px solid var(--phosphor-dim);
+  box-shadow: inset 0 0 20px rgba(51,255,102,0.06);
+}
+#chart-wrap.shake { animation: shake 0.28s linear infinite; }
+@keyframes shake {
+  0%   { transform: translate(0,0); }
+  25%  { transform: translate(-3px, 2px); }
+  50%  { transform: translate(2px, -3px); }
+  75%  { transform: translate(-2px, -2px); }
+  100% { transform: translate(3px, 2px); }
+}
+#chart { display: block; width: 100%; height: 100%; }
+
+#no-continues {
+  text-align: center;
+  color: var(--red);
+  font-size: clamp(9px, 3vw, 12px);
+  letter-spacing: 2px;
+  text-shadow: 0 0 8px rgba(255,59,48,0.5);
+  flex-shrink: 0;
+}
+
+/* ---------- The one and only control: SELL ---------- */
+.sell-btn {
+  flex-shrink: 0;
+  width: 100%;
+  padding: 18px 0;
+  border: none;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-family: inherit;
+  font-size: clamp(18px, 6vw, 28px);
+  letter-spacing: 4px;
+  cursor: pointer;
+  text-shadow: 0 2px 0 rgba(0,0,0,0.4);
+  box-shadow: 0 6px 0 #a01008, 0 0 18px rgba(255,59,48,0.5);
+  transition: transform 0.05s;
+}
+.sell-btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #a01008; }
+/* during a crash the button glows brighter and pulses — tempting you */
+.sell-btn.tempting {
+  animation: tempt 0.5s ease-in-out infinite alternate;
+}
+@keyframes tempt {
+  from { background: var(--red);        box-shadow: 0 6px 0 #a01008, 0 0 18px rgba(255,59,48,0.5); }
+  to   { background: var(--red-bright); box-shadow: 0 6px 0 #a01008, 0 0 40px rgba(255,107,96,0.95); }
+}
+
+/* The plate that replaces SELL during the 3s "it kept going" reveal */
+#sold-plate {
+  display: none;                 /* only shown during the reveal */
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 18px 0;
+  border-radius: 8px;
+  border: 2px solid var(--phosphor-dim);
+  text-align: center;
+  color: var(--phosphor-dim);
+  font-size: clamp(12px, 4vw, 18px);
+  letter-spacing: 2px;
+}
+#sold-plate #plate-price { color: var(--phosphor); }
+/* during the reveal we swap which of the two is visible */
+#game.revealing #sell       { display: none; }
+#game.revealing #sold-plate { display: block; }
+/* the multiplier turns amber and runs away from you */
+#multiplier.revealing {
+  color: var(--amber);
+  text-shadow: 0 0 12px var(--amber), 0 0 30px rgba(255,176,0,0.7);
+}
+
+/* ============================================================
+   RESULT SCREEN
+   ============================================================ */
+#result {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 18px;
+}
+#result .cashed {
+  color: var(--amber);
+  font-size: clamp(16px, 6vw, 26px);
+  letter-spacing: 4px;
+  text-shadow: 0 0 10px var(--amber);
+}
+/* The frozen chart at the top of the result screen.
+   It is the ONLY part of this screen allowed to change size: on a short phone
+   it gives up height so the text below always fits, rather than everything
+   squeezing together. The text elements below are pinned with flex-shrink: 0. */
+#result-chart-wrap {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 56px;
+  max-height: clamp(96px, 20vh, 180px);
+  border: 2px solid var(--phosphor-dim);
+  box-shadow: inset 0 0 16px rgba(51,255,102,0.06);
+}
+#result > *:not(#result-chart-wrap) { flex-shrink: 0; }
+
+/* Very short screens (small phones, or a phone with lots of browser chrome):
+   close up the spacing so the chart keeps a usable height and nothing clips. */
+@media (max-height: 640px) {
+  #result { gap: 9px; }
+  #result-chart-wrap { min-height: 44px; }
+}
+#result-chart { display: block; width: 100%; height: 100%; }
+
+/* "on DAY 175" / "by DAY 189" under each multiplier */
+.result-numbers .day-sold { color: var(--phosphor); opacity: 0.75; }
+.result-numbers .day-went { color: var(--amber);    opacity: 0.8; }
+
+/* Two equal columns that stay SIDE BY SIDE at any width — a flex row would
+   wrap them onto separate lines once the multipliers get long. */
+.result-numbers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+  align-items: start;
+}
+.result-numbers .col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;         /* let the column shrink instead of forcing overflow */
+}
+.result-numbers .cap {
+  font-size: clamp(8px, 2.6vw, 10px);
+  color: var(--phosphor-dim);
+  line-height: 1.6;
+}
+#sold-at, #went-to {
+  font-size: clamp(13px, 5.2vw, 30px);
+  white-space: nowrap;
+  line-height: 1.2;
+}
+#sold-at { color: var(--phosphor); text-shadow: 0 0 10px var(--phosphor); }
+#went-to { color: var(--amber);    text-shadow: 0 0 12px var(--amber); }
+#flavour {
+  color: var(--phosphor);
+  font-size: clamp(10px, 3.4vw, 15px);
+  line-height: 1.7;
+  max-width: 90%;
+  text-shadow: 0 0 6px rgba(51,255,102,0.5);
+}
+#result .dd-survived {
+  font-size: clamp(9px, 3vw, 12px);
+  color: var(--red);
+  line-height: 1.7;
+}
+#result .newbest {
+  color: var(--amber);
+  font-size: clamp(9px, 3vw, 12px);
+  text-shadow: 0 0 8px var(--amber);
+}
+.insert-btn {
+  margin-top: 6px;
+  padding: 14px 22px;
+  border: 2px solid var(--phosphor);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--phosphor);
+  font-family: inherit;
+  font-size: clamp(10px, 3.4vw, 14px);
+  letter-spacing: 2px;
+  cursor: pointer;
+  text-shadow: 0 0 8px var(--phosphor);
+  box-shadow: 0 0 14px rgba(51,255,102,0.3);
+}
+.insert-btn:active { transform: translateY(2px); }
+
+/* small print under the cabinet */
+#coin-slot {
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 8px;
+  color: #333;
+  padding-top: 10px;
+  letter-spacing: 1px;
+  line-height: 1.4;
+  /* Must stay on one line — wrapped, it collides with the cabinet edge. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+</style>
+</head>
+<body>
+
+<div id="cabinet">
+  <!-- Amber marquee, always visible on top of the cabinet -->
+  <div id="marquee">YOLO</div>
+
+  <!-- The CRT screen; all three game views live inside here -->
+  <div id="screen">
+
+    <!-- ============== ATTRACT SCREEN ============== -->
+    <div id="attract" class="view active">
+      <div class="big-yolo">YOLO</div>
+      <div class="insert blink">INSERT FULL PORT</div>
+      <div class="stat-block">
+        <div><span class="label">HIGH SCORE</span><br><span class="value" id="a-highscore">1.00x</span></div>
+        <div><span class="label">DEEPEST DRAWDOWN SURVIVED</span><br><span class="value" id="a-drawdown">0%</span></div>
+      </div>
+      <div class="hint">CLICK / TAP / PRESS ANY KEY</div>
+    </div>
+
+    <!-- ============== GAME SCREEN ============== -->
+    <div id="game" class="view">
+      <div id="hud">
+        <div id="multiplier">1.00x</div>
+        <div id="hud-right">
+          <div id="drawdown">DD 0%</div>
+          <div id="timer">0.0s</div>
+        </div>
+      </div>
+
+      <div id="chart-wrap">
+        <canvas id="chart"></canvas>
+      </div>
+
+      <div id="no-continues">NO CONTINUES</div>
+
+      <button id="sell" class="sell-btn">SELL</button>
+
+      <!-- Shown in place of SELL for 3s after selling, while the chart
+           keeps climbing in front of you. -->
+      <div id="sold-plate">SOLD AT <span id="plate-price">0.00x</span></div>
+    </div>
+
+    <!-- ============== RESULT SCREEN ============== -->
+    <div id="result" class="view">
+      <!-- the frozen chart: your run, your exit, and the climb you missed -->
+      <div id="result-chart-wrap"><canvas id="result-chart"></canvas></div>
+
+      <div class="cashed">CASHED OUT</div>
+      <div class="result-numbers">
+        <div class="col">
+          <div class="cap">YOU SOLD AT</div>
+          <div id="sold-at">0.00x</div>
+          <div class="cap day-sold" id="sold-day">on DAY 0</div>
+        </div>
+        <div class="col">
+          <div class="cap">IT WENT TO</div>
+          <div id="went-to">0.00x</div>
+          <div class="cap day-went" id="went-day">by DAY 0</div>
+        </div>
+      </div>
+      <div id="flavour">you had it.</div>
+      <div class="dd-survived">DEEPEST DRAWDOWN SURVIVED: <span id="r-drawdown">0%</span></div>
+      <div class="newbest" id="r-newbest" style="visibility:hidden;">NEW HIGH SCORE!</div>
+      <button id="insert" class="insert-btn">INSERT FULL PORT</button>
+    </div>
+
+  </div>
+
+  <div id="coin-slot">1 CREDIT = 1 FULL PORT</div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   CONFIG  —  every tunable number lives here.
+   Change these to change how the game feels.
+   ============================================================ */
+const CONFIG = {
+  // --- CANDLE TIMING ---
+  candleMs: 500,          // how often a new candle forms (ms). Lower = faster, more frantic game.
+  visibleCandles: 60,     // how many candles fit on screen. Higher = more zoomed-out history.
+
+  // --- IN-GAME CALENDAR ---
+  // How many real seconds count as one in-game day. This only changes how time
+  // is LABELLED — it never touches the price engine or how fast candles form.
+  // At 6, a typical 17x exit lands around DAY 34. Raise it and the same run
+  // reads as fewer days (12 would halve every day count); lower it and the
+  // calendar races ahead (1 would put that same 17x exit near DAY 200).
+  secondsPerDay: 6,
+
+  // --- THE GROWTH CURVE (where a normal run is supposed to be on a given day) ---
+  // The chart aims at this curve rather than compounding a fixed percentage every
+  // candle. Compounding is what let old runs reach five- and six-figure
+  // multipliers: a steady 2% a candle doubles every 35 candles forever. This curve
+  // climbs quickly at first and then flattens, and can never pass maxMultiplier.
+  //
+  //     multiplier = (1 + day / growthDayScale) ^ growthExponent
+  //
+  // Note this curve is the price's AIMING point, not the path it actually walks.
+  // Crashes and pullbacks keep dragging it under the line, so a real run reads
+  // lower than the formula — these values are tuned so the run you actually see
+  // lands near 4.5x by DAY 20, 21x by DAY 50 and 118x by DAY 120, levelling off
+  // around 325x. Raising trendPull below tightens the price to the curve.
+  growthDayScale: 10,     // raise to stretch the whole curve out, lower to speed it up
+  growthExponent: 2.05,   // raise for a steeper climb that hits the ceiling sooner
+  maxMultiplier: 500,     // the ceiling growth eases toward but never reaches
+  ceilingKnee: 0.55,      // fraction of the ceiling where the easing begins. Below
+                          // 55% of 500 (275x) growth is completely untouched; above
+                          // it the climb flattens off smoothly, so long runs finish
+                          // on varied numbers instead of all pinning to the cap.
+                          // Lower = flattens earlier and more gently.
+
+  // How hard each candle pulls the price back toward the curve. This doubles as the
+  // recovery speed after a crash: raise it and crashes snap back almost instantly
+  // (which makes them feel cheap), lower it and the price wallows below the curve
+  // for a long time. It is also what makes crashes readable on the chart, because
+  // the recovery is spread over enough candles to be a visible shape.
+  trendPull: 0.05,
+
+  // The pull is much stronger when the price is ABOVE the curve than below it. A
+  // crash should take a long, visible while to climb out of, but a lucky run of
+  // green candles should not be able to wander far over the curve — with a weak
+  // symmetrical pull the random walk simply outruns it, and runs were peaking
+  // around 795x on a 500x ceiling. Higher = overshoots are reined in faster.
+  trendPullDown: 0.40,
+
+  // --- VOLATILITY (how big the candles are, and how that changes over time) ---
+  // Volatility is a slow-moving LEVEL, not a fresh roll each candle. It wanders
+  // between these bounds, which is what gives the chart quiet stretches of tiny
+  // candles and stormy stretches of big ones instead of a uniform sawtooth.
+  volMin: 0.012,          // calmest stretches. Lower = flatter, sleepier lulls.
+  volMax: 0.140,          // stormiest stretches. Higher = wilder storms.
+  volDrift: 0.09,         // how far the volatility level can wander each candle, as a
+                          // fraction of the range above. LOW = long, distinct moods;
+                          // high = mood changes every few candles (back to uniform mush).
+  volPull: 0.012,         // gentle pull back toward the middle of the range so it doesn't
+                          // park at one extreme. Higher = volatility hugs the average.
+
+  // Most candles are small and a few are enormous. This is the chance a candle
+  // gets a "burst" multiplying its size, which is what drops the occasional
+  // long bar into an otherwise quiet stretch.
+  burstChance: 0.07,      // 7% of candles. Higher = big bars stop being surprising.
+  burstMin: 2.5,          // a burst is at least this many times normal size...
+  burstMax: 6.0,          // ...and at most this many. Higher = rarer-feeling shocks.
+  maxCandleMove: 0.14,    // hard cap on how far ONE candle can move (14%). Safety valve
+                          // so a burst during a storm can't teleport the price.
+
+  // --- SMALL PULLBACKS (little dips during an uptrend, between the big crashes) ---
+  // These are the difference between a clean climb and a believable one. They
+  // are meant to sting, not scare — no shake, no siren, no red flash.
+  // Gaps between pullbacks are drawn from an exponential distribution with this
+  // mean, NOT from a flat min-to-max range. This matters: a flat range still
+  // arrives on a beat and draws evenly spaced sawtooth teeth. An exponential gap
+  // genuinely clusters — sometimes three in quick succession, sometimes a long
+  // clean run — which is what stops the chart looking mechanical.
+  dipEveryMeanSec: 7,     // average seconds between pullbacks. Lower = choppier climbs.
+  dipMinDepth: 0.02,      // shallowest pullback...
+  dipMaxDepth: 0.15,      // ...and deepest. Depths are skewed toward the shallow end, so
+                          // most barely register and the occasional one really bites.
+  dipMinCandles: 2,       // shortest pullback, in candles.
+  dipMaxCandles: 8,       // longest. Higher = pullbacks start feeling like real crashes.
+
+  // --- JAGGED CRASHES (relief bounces on the way down) ---
+  crashBounceChance: 0.30, // chance a crash candle ticks UP instead of down, so the fall
+                           // is a staircase rather than a cliff. The crash still reaches
+                           // its full depth either way. Higher = messier, crueller drops.
+  crashBounceSize: 0.55,   // how big those bounces are next to a down-step. Higher = more
+                           // convincing false hope on the way down.
+
+  // --- CRASH TIMING ---
+  crashEveryMinSec: 8,    // soonest a crash can start after the last one (seconds). Lower = more chaos.
+  crashEveryMaxSec: 20,   // latest a crash can start (seconds). Lower = crashes come more often.
+  // Crash length matters for more than pacing: it is what makes a crash VISIBLE on
+  // the result chart. That chart squeezes a whole run into roughly 250 pixels, so a
+  // 5-candle crash in a 500-candle run is under 3 pixels wide — the drop is drawn,
+  // but as a hairline you cannot see. These lengths keep it a readable shape.
+  crashMinCandles: 10,    // shortest crash length in candles. Lower = sharper but thinner.
+  crashMaxCandles: 20,    // longest crash length in candles. Higher = slower, grinding bleeds.
+
+  // --- CRASH DEPTH (how far price falls) ---
+  crashMinDepth: 0.25,    // smallest crash: fall 25% from current price. Higher = scarier baseline.
+  crashMaxDepth: 0.65,    // biggest crash: fall 65%. Higher = more brutal. Near 1.0 gets punishing.
+
+  // Depths are skewed toward the shallow end rather than spread evenly. This is
+  // what stops DEEPEST DRAWDOWN SURVIVED reading the same number every run: the
+  // figure is the WORST of every crash you sat through, and with evenly spread
+  // depths the worst of twenty crashes is ~65% essentially every time. Making the
+  // deep ones genuinely rare means the worst drop varies from run to run, and a
+  // 60% crash is a story rather than a Tuesday.
+  // 1 = evenly spread. Higher = deep crashes get rarer.
+  crashDepthSkew: 2.2,
+
+  // There is no separate "bounce" phase any more. Once a crash bottoms out the
+  // price simply returns to normal drift, and trendPull above carries it back up
+  // toward the growth curve. That is what makes the recovery a wide, obvious
+  // V on the chart instead of a scripted snap-back.
+
+  // How much bigger crashes are allowed to get the longer you hold.
+  // At 0s it's 0 extra; this many EXTRA depth-fraction is added per minute survived,
+  // so holding stays uncomfortable at every stage. Higher = late game gets nastier faster.
+  crashDepthRampPerMin: 0.06,
+  crashDepthRampCap: 0.25, // most extra depth the ramp can ever add. Caps how bad it gets.
+
+  // --- HARD FLOORS (price can NEVER go below these; it must always recover) ---
+  // This has to sit clear of the deepest crash, or it silently becomes the answer.
+  // A floor at 35% of peak IS a 65% drawdown, so with crashMaxDepth at 0.65 every
+  // deep crash bottomed on the floor and DEEPEST DRAWDOWN SURVIVED read exactly
+  // 65% run after run. It needs to sit below anything the crashes can produce
+  // — including two crashes landing back to back before the first has recovered
+  // — so that the readout reports the drop that actually happened. Raise this
+  // toward 0.35 and the readout starts pinning again.
+  floorFractionOfPeak: 0.15, // price can't drop below 15% of the run's all-time high.
+  floorAbsolute: 0.50,       // price can't drop below 0.50x no matter what.
+
+  // --- RESULT SCREEN ---
+  cashoutAnimMs: 3000,       // how long the "it kept going up" animation lasts (ms).
+  cashoutExtraMin: 3.0,      // after you sell, price climbs to at least this many x your exit...
+  cashoutExtraMax: 12.0,     // ...and at most this many x your exit. Higher = more painful FOMO.
+
+  // How far past your exit the continuation runs, as a fraction of the days you
+  // held. 0.10-0.20 keeps it short — sell on DAY 100 and it stops around DAY
+  // 110-120, so the gain you missed reads as "just a few more days". Raise these
+  // and the continuation sprawls, which makes the miss feel unreachable instead.
+  contDaysMin: 0.10,
+  contDaysMax: 0.20,
+
+  // Smallest share of the result chart's width given to the continuation. Held
+  // strictly to scale, a 6-day climb after a 33-day run gets 15% of the width,
+  // which squashes the shape you missed into an unreadable sliver. This floor
+  // widens it so the shape reads. The panel draws no time axis and the exact
+  // days are printed underneath, so nothing here claims to be to scale.
+  // Set to 0 for a strictly proportional time axis.
+  resultContMinWidth: 0.30,
+
+  // --- SOUND ---
+  soundOn: true,             // master switch for the beeps. Set false for silence.
+};
+
+/* ============================================================
+   FLAVOUR TEXT  —  one line is picked at random on the result screen.
+   Add, remove or reword freely; the game just picks from this list.
+   Keep lines under about 46 characters or they wrap to three lines
+   on a narrow phone and push the layout tight.
+   ============================================================ */
+const FLAVOUR = [
+  // the loud ones
+  "see where it went.",
+  "you only live once.",
+  "believe in something.",
+  "make holding great again.",
+  "conviction is a muscle.",
+  "hold forever.",
+  "legends don't cash out.",
+  "history remembers the holders.",
+  "fortune favours the still.",
+  "greatness was just waiting.",
+  "weak hands, real regret.",
+  "never selling. that was the plan.",
+
+  // the dry ones
+  "you had it.",
+  "the chart didn't need you.",
+  "everyone sells eventually. that's the problem.",
+  "it was never going to wait for you.",
+  "you were early. you left early.",
+  "nothing was wrong. you just blinked.",
+  "you were right. briefly.",
+  "it was up when you left.",
+  "a fine trade. a small one.",
+  "you found the one bad moment.",
+  "the math didn't change. you did.",
+  "there was no signal. you invented one.",
+  "the button worked. that's the tragedy.",
+  "you sold the bottom of the top.",
+  "your hands were fine. your nerve wasn't.",
+  "no one rang a bell. you rang it yourself.",
+  "fear is just maths you didn't do.",
+  "that was the easy part.",
+  "it kept going. it always keeps going.",
+];
+
+/* ============================================================
+   SHARED FORMATTING  —  used by both the canvas and the HTML readouts,
+   so a number never appears two different ways on the same screen.
+   ============================================================ */
+
+// Format a multiplier. Long runs reach four and five figures, so we drop
+// decimals as the number grows — "3582x" reads better than "3582.21x"
+// and keeps the readouts from overflowing on a phone.
+function fmtX(v) {
+  if (v < 100)  return v.toFixed(2) + "x";
+  if (v < 1000) return v.toFixed(1) + "x";
+  return Math.round(v) + "x";
+}
+
+// Ease a raw multiplier toward the ceiling instead of chopping it off there.
+// Below the knee nothing changes at all. Above it, whatever is left over is
+// compressed into the remaining headroom and the result only ever APPROACHES
+// maxMultiplier — it never arrives. Clamping with Math.min instead is what made
+// long runs all land on exactly 500.0x: every value past the ceiling collapsed
+// onto the same number. The curve is smooth through the knee, so there is no
+// visible kink where the easing starts.
+function softCeiling(raw) {
+  const cap = CONFIG.maxMultiplier;
+  const knee = cap * CONFIG.ceilingKnee;
+  if (raw <= knee) return raw;
+  const headroom = cap - knee;
+  // x/(1+x) rises toward 1 without ever reaching it, and — unlike an exponential
+  // easing — it approaches slowly enough that even enormous inputs still map to
+  // visibly different outputs. That matters: an exponential version of this
+  // flattened so hard that everything past ~1500x came back as 500.0 again.
+  const x = (raw - knee) / headroom;
+  return knee + headroom * (x / (1 + x));
+}
+
+/* ============================================================
+   SOUND  —  all tones generated in code via Web Audio API.
+   No audio files are loaded.
+   ============================================================ */
+const Sound = (function () {
+  let ctx = null;
+
+  // The browser only allows audio to start after a user gesture,
+  // so we create the audio context lazily on the first interaction.
+  function ensure() {
+    if (!CONFIG.soundOn) return null;
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) ctx = new AC();
+    }
+    if (ctx && ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+
+  // Play a tone that slides from one frequency to another.
+  function slide(fromHz, toHz, durSec, type, gainLevel) {
+    const c = ensure();
+    if (!c) return;
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = type || "square";
+    osc.frequency.setValueAtTime(fromHz, c.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(1, toHz), c.currentTime + durSec);
+    // simple attack + fade so it doesn't click
+    gain.gain.setValueAtTime(0.0001, c.currentTime);
+    gain.gain.exponentialRampToValueAtTime(gainLevel || 0.18, c.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + durSec);
+    osc.connect(gain).connect(c.destination);
+    osc.start();
+    osc.stop(c.currentTime + durSec + 0.05);
+  }
+
+  return {
+    unlock: ensure,
+    // low descending beep when a crash begins
+    crashStart() { slide(320, 70, 0.55, "sawtooth", 0.22); },
+    // short rising beep when the crash bottoms out and price recovers
+    recover()    { slide(180, 520, 0.28, "square", 0.18); },
+    // little confirmation blip when you sell
+    sell()       { slide(660, 990, 0.12, "square", 0.2); },
+    // soft coin blip when a run starts
+    coin()       { slide(880, 1320, 0.1, "square", 0.16); },
+  };
+})();
+
+/* ============================================================
+   PRICE ENGINE  —  produces the candle data.
+   Knows nothing about drawing or the DOM.
+   ============================================================ */
+const Price = (function () {
+  // Each candle is { open, high, low, close }.
+  let candles = [];           // just the visible window, trimmed as it scrolls
+  let history = [];           // every candle of the run, for the result chart
+  const MAX_HISTORY = 20000;  // ~2.7 hours of play before the oldest are dropped
+  let price = 1.0;        // current price (the latest close)
+  let peak = 1.0;         // highest price seen this run
+  let deepestDD = 0;      // deepest drawdown survived this run (0..1)
+
+  // A run moves through three phases, over and over:
+  //   "drift"   — the normal climb toward the growth curve, waiting for a crash
+  //   "dip"     — a small pullback mid-climb (no shake, no siren)
+  //   "crash"   — price falling hard (this is when the screen shakes)
+  // There is no recovery phase: after a crash the price returns to drift, and the
+  // pull toward the growth curve carries it back up on its own.
+  let phase = "drift";
+  let phaseCandlesLeft = 0;   // candles remaining in the dip or crash phase
+  let phaseStep = 1;          // per-candle multiplier during a dip
+  let crashTarget = 1;        // the price this crash is heading for
+  let candlesUntilCrash = 0;  // countdown of candles until the next crash starts
+  let candlesUntilDip = 0;    // countdown of candles until the next small pullback
+  let candleCount = 0;        // candles produced this run — this is our clock
+
+  // The volatility LEVEL. This is the thing that makes the chart look alive:
+  // it wanders slowly, so the chart gets quiet patches and stormy patches
+  // instead of the same size wiggle on every candle.
+  let vol = 0;
+
+  let runStartTime = 0;
+
+  function rand(min, max) { return min + Math.random() * (max - min); }
+
+  // Nudge the volatility level along by one candle. A slow random walk with a
+  // gentle pull toward the middle, clamped to the configured range.
+  function stepVolatility() {
+    const mid = (CONFIG.volMin + CONFIG.volMax) / 2;
+    const span = CONFIG.volMax - CONFIG.volMin;
+    vol += (Math.random() * 2 - 1) * span * CONFIG.volDrift;
+    vol += (mid - vol) * CONFIG.volPull;
+    if (vol < CONFIG.volMin) vol = CONFIG.volMin;
+    if (vol > CONFIG.volMax) vol = CONFIG.volMax;
+  }
+
+  // How far this candle moves, ignoring direction. Multiplying two random
+  // numbers together is what makes most candles small: the result piles up
+  // near zero, so big values are naturally rare. The burst roll then
+  // occasionally multiplies one up into a really long bar.
+  function moveSize() {
+    let f = Math.random() * Math.random();
+    if (Math.random() < CONFIG.burstChance) f *= rand(CONFIG.burstMin, CONFIG.burstMax);
+    return Math.min(f * vol, CONFIG.maxCandleMove);
+  }
+
+  // A move with a random direction, for wiggle around a trend.
+  function wiggle(scale) {
+    return (Math.random() < 0.5 ? -1 : 1) * moveSize() * (scale === undefined ? 1 : scale);
+  }
+
+  // How energetic the market is right now, as a multiple of its own average:
+  // about 0.2 in a dead-calm stretch and about 1.8 in a storm.
+  function volScale() {
+    return vol / ((CONFIG.volMin + CONFIG.volMax) / 2);
+  }
+
+  // Which in-game day this run has reached. Counted in candles rather than read
+  // from the clock, so a headless simulation and the live game agree exactly.
+  function currentDay() {
+    return candleCount / ((CONFIG.secondsPerDay * 1000) / CONFIG.candleMs);
+  }
+
+  // Where a normal run is supposed to be by now. See the growth curve note in
+  // CONFIG — this is what replaces open-ended compounding.
+  function trendPrice() {
+    const t = Math.pow(1 + currentDay() / CONFIG.growthDayScale, CONFIG.growthExponent);
+    return softCeiling(t);
+  }
+
+  // Schedule when the next crash will begin, in candles.
+  function scheduleNextCrash() {
+    const sec = rand(CONFIG.crashEveryMinSec, CONFIG.crashEveryMaxSec);
+    candlesUntilCrash = Math.round((sec * 1000) / CONFIG.candleMs);
+  }
+
+  // Schedule the next small pullback, in candles. The gap is EXPONENTIAL, not a
+  // flat range: taking -mean * ln(random) gives lots of short gaps and a few long
+  // ones, so pullbacks cluster and straggle. A flat range still lands on a beat,
+  // which is what drew evenly spaced teeth.
+  function scheduleNextDip() {
+    const sec = -CONFIG.dipEveryMeanSec * Math.log(1 - Math.random());
+    candlesUntilDip = Math.max(2, Math.round((sec * 1000) / CONFIG.candleMs));
+  }
+
+  // Begin a small pullback. Depth is skewed toward the shallow end by squaring a
+  // random number, so most pullbacks are barely there and the odd one really
+  // bites — sizes vary as much as the spacing does. Deliberately quiet: no sound,
+  // no shake, and isCrashing() stays false.
+  function startDip() {
+    phase = "dip";
+    phaseCandlesLeft = Math.round(rand(CONFIG.dipMinCandles, CONFIG.dipMaxCandles));
+    const r = Math.random();
+    const depth = CONFIG.dipMinDepth + (CONFIG.dipMaxDepth - CONFIG.dipMinDepth) * r * r;
+    phaseStep = Math.pow(1 - depth, 1 / phaseCandlesLeft);
+  }
+
+  // Begin a crash: decide its depth and length, then remember the price it is
+  // heading for. The descent itself is worked out candle by candle so it can
+  // bounce on the way down and still arrive.
+  function startCrash() {
+    phase = "crash";
+
+    // Depth is always a genuine random pick between crashMinDepth and
+    // crashMaxDepth. The "longer runs bite harder" ramp raises the SHALLOW end of
+    // that range as the run goes on, so late crashes skew deep — it does not push
+    // past crashMaxDepth. Adding the ramp on top instead drove most late crashes
+    // past the floor, where every one of them bottomed out at exactly the same
+    // price and the drawdown readout stuck at its maximum.
+    const minutesSurvived = (performance.now() - runStartTime) / 60000;
+    const ramp = Math.min(CONFIG.crashDepthRampCap, minutesSurvived * CONFIG.crashDepthRampPerMin);
+    const shallowEnd = Math.min(CONFIG.crashMinDepth + ramp, CONFIG.crashMaxDepth - 0.05);
+    const roll = Math.pow(Math.random(), CONFIG.crashDepthSkew);   // rare near 1
+    const depth = shallowEnd + (CONFIG.crashMaxDepth - shallowEnd) * roll;
+
+    phaseCandlesLeft = Math.round(rand(CONFIG.crashMinCandles, CONFIG.crashMaxCandles));
+    crashTarget = price * (1 - depth);
+
+    Sound.crashStart();
+  }
+
+  // One candle of a jagged fall. Most candles step down toward the target, but
+  // some tick up instead — a relief bounce. The down-steps are recalculated
+  // from whatever distance is LEFT, so the bounces never stop the crash from
+  // reaching its full depth, and the final candle lands exactly on target.
+  function crashCandle() {
+    if (phaseCandlesLeft <= 1) { price = crashTarget; return; }
+
+    // The down-step needed to cover the remaining distance in the candles left.
+    const per = Math.pow(crashTarget / price, 1 / phaseCandlesLeft);
+    const downMagnitude = 1 - per;                 // e.g. 0.06 for a 6% step
+
+    if (Math.random() < CONFIG.crashBounceChance) {
+      // relief bounce, sized relative to the step it replaces
+      price = price * (1 + downMagnitude * CONFIG.crashBounceSize * rand(0.5, 1.5));
+    } else {
+      price = price * per * (1 - wiggle(0.5));
+    }
+  }
+
+  // The lowest price currently allowed (the hard floor).
+  function currentFloor() {
+    return Math.max(CONFIG.floorAbsolute, peak * CONFIG.floorFractionOfPeak);
+  }
+
+  // Advance the simulation by exactly one candle and append it.
+  function step() {
+    const open = price;
+
+    // The volatility level moves first, so this candle's size reflects it.
+    stepVolatility();
+
+    if (phase === "crash") {
+      // Falling hard, in a jagged staircase rather than a straight line.
+      crashCandle();
+      phaseCandlesLeft--;
+      if (phaseCandlesLeft <= 0) {
+        // Bottomed out. Straight back to drift — the pull toward the growth
+        // curve does the recovering, which is what makes it a wide visible V.
+        phase = "drift";
+        scheduleNextCrash();
+        scheduleNextDip();
+        Sound.recover();
+      }
+
+    } else if (phase === "dip") {
+      // A small pullback: give a little back, with the usual wiggle on top.
+      price = price * phaseStep * (1 + wiggle(0.5));
+      phaseCandlesLeft--;
+      if (phaseCandlesLeft <= 0) {
+        phase = "drift";
+        scheduleNextDip();
+      }
+
+    } else {
+      // Normal drift: close some of the gap to where the growth curve says this
+      // run should be, plus the usual wiggle. Being far below the curve (just
+      // after a crash) pulls hard; sitting on it barely pulls at all; and as the
+      // curve eases toward the ceiling the climb quietly runs out of road.
+      // This pull works in BOTH directions, so a price nudged above the curve is
+      // drawn back down — which is why no hard ceiling clamp is needed.
+      const gap = trendPrice() / price;
+      const pull = gap < 1 ? CONFIG.trendPullDown : CONFIG.trendPull;
+      price = price * Math.pow(gap, pull) * (1 + wiggle());
+
+      // Count down to the next crash, and to the next small pullback.
+      candlesUntilCrash--;
+      candlesUntilDip--;
+      if (candlesUntilCrash <= 0) startCrash();
+      else if (candlesUntilDip <= 0) startDip();
+    }
+
+    candleCount++;
+
+    // Enforce the hard floor: price must always be able to recover.
+    const floor = currentFloor();
+    if (price < floor) price = floor;
+
+    // Update peak and drawdown tracking.
+    if (price > peak) peak = price;
+    const dd = (peak - price) / peak;      // 0 at peak, grows as we fall below it
+    if (dd > deepestDD) deepestDD = dd;
+
+    // Build the candle. Wicks scale with the current volatility, so calm
+    // stretches get stubby candles and stormy ones get long spiky wicks.
+    const hi = Math.max(open, price) * (1 + Math.random() * vol * 0.5);
+    let lo = Math.min(open, price) * (1 - Math.random() * vol * 0.5);
+    if (lo < floor) lo = floor;            // wicks respect the floor too
+    const candle = { open: open, high: hi, low: lo, close: price };
+    candles.push(candle);
+
+    // Keep only what we need to draw (a little extra for smoothness).
+    const keep = CONFIG.visibleCandles + 5;
+    if (candles.length > keep) candles.splice(0, candles.length - keep);
+
+    // The scrolling chart above only keeps a 60-candle window, but the result
+    // screen wants the WHOLE run, so keep an untrimmed copy here too. The cap
+    // is a safety net for someone who leaves a run going for hours.
+    history.push(candle);
+    if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY);
+
+    return { dd: dd };
+  }
+
+  return {
+    reset() {
+      candles = [];
+      history = [];
+      price = 1.0;
+      peak = 1.0;
+      deepestDD = 0;
+      phase = "drift";
+      phaseCandlesLeft = 0;
+      phaseStep = 1;
+      crashTarget = 1;
+      candleCount = 0;
+      vol = (CONFIG.volMin + CONFIG.volMax) / 2;   // start mid-range
+      runStartTime = performance.now();
+      scheduleNextCrash();
+      scheduleNextDip();
+      // seed one opening candle so the chart isn't empty
+      const seed = { open: 1.0, high: 1.0, low: 1.0, close: 1.0 };
+      candles.push(seed);
+      history.push(seed);
+    },
+    step,
+    // read-only accessors for the rest of the game
+    getCandles() { return candles; },
+    getHistory() { return history; },
+    getPrice() { return price; },
+    getPeak() { return peak; },
+    getDrawdown() { return (peak - price) / peak; },
+    getDeepestDD() { return deepestDD; },
+    // Only the falling phase counts as "crashing" — the shake and the red
+    // flash stop the moment the price bottoms out.
+    isCrashing() { return phase === "crash"; },
+    // Build the whole "what you missed" path in one go, so the reveal and the
+    // result chart show exactly the same shape. It is a geometric climb from
+    // `from` up to `to`, roughened by a wandering wiggle so it looks like the
+    // rest of the chart rather than a clean ramp. The wiggle is tapered to
+    // nothing at both ends, so the path starts exactly at your exit price and
+    // finishes exactly on target.
+    makeContinuation(from, to, n) {
+      // one slow-walk value per candle, same idea as the live chart's wiggle
+      const walk = [];
+      let w = 0;
+      for (let i = 0; i <= n; i++) {
+        w = w * 0.80 + (Math.random() * 2 - 1) * vol * 1.6;
+        w = Math.max(-0.35, Math.min(0.35, w));
+        walk.push(w);
+      }
+
+      const out = [];
+      let prev = from;
+      for (let i = 1; i <= n; i++) {
+        const t = i / n;
+        const trend = from * Math.pow(to / from, t);      // the underlying climb
+        const taper = Math.sin(Math.PI * t);              // 0 at both ends, 1 mid-way
+        const close = i === n ? to : trend * (1 + walk[i] * taper);
+        const hi = Math.max(prev, close) * (1 + Math.random() * vol * 0.5);
+        const lo = Math.min(prev, close) * (1 - Math.random() * vol * 0.5);
+        out.push({ open: prev, high: hi, low: lo, close: close });
+        prev = close;
+      }
+      return out;
+    },
+
+    // Used only by the "it kept going up" reveal: drop one ready-made candle
+    // from that path into the visible window. Deliberately does NOT touch
+    // `history` — the continuation is what WOULD have happened, not part of
+    // the run you actually played.
+    _pushCandle(candle) {
+      candles.push(candle);
+      price = candle.close;
+      if (price > peak) peak = price;
+      const keep = CONFIG.visibleCandles + 5;
+      if (candles.length > keep) candles.splice(0, candles.length - keep);
+    },
+  };
+})();
+
+/* ============================================================
+   RENDERING  —  draws the candlestick chart onto the canvas.
+   ============================================================ */
+const Renderer = (function () {
+  const canvas = document.getElementById("chart");
+  const ctx = canvas.getContext("2d");
+  let W = 0, H = 0;
+
+  // Match the canvas pixel size to its on-screen size (handles resize + retina).
+  // Returns false if the chart isn't on screen yet (nothing to size to).
+  function resize() {
+    const wrap = document.getElementById("chart-wrap");
+    const w = wrap.clientWidth;
+    const h = wrap.clientHeight;
+    if (w === 0 || h === 0) return false;   // view is still hidden — try again later
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = w;
+    H = h;
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return true;
+  }
+
+  function draw() {
+    // Self-heal: if the container size no longer matches the canvas
+    // (first paint, window resize, phone rotation), re-fit before drawing.
+    const wrap = document.getElementById("chart-wrap");
+    if (wrap.clientWidth !== W || wrap.clientHeight !== H) {
+      if (!resize()) return;                // still hidden, nothing to draw onto
+    }
+
+    const candles = Price.getCandles();
+    ctx.clearRect(0, 0, W, H);
+
+    // Only draw the most recent visibleCandles.
+    const view = candles.slice(-CONFIG.visibleCandles);
+    if (view.length === 0) return;
+
+    // Work out the price range on screen, with a little padding.
+    let lo = Infinity, hi = -Infinity;
+    for (const c of view) { if (c.low < lo) lo = c.low; if (c.high > hi) hi = c.high; }
+    const pad = (hi - lo) * 0.12 || 0.1;
+    lo -= pad; hi += pad;
+    if (hi - lo < 0.0001) hi = lo + 0.0001;
+
+    // Helper: turn a price into a Y pixel (higher price = higher on screen).
+    const yOf = (p) => H - ((p - lo) / (hi - lo)) * H;
+
+    // --- horizontal gridlines for that oscilloscope feel ---
+    ctx.strokeStyle = "rgba(51,255,102,0.10)";
+    ctx.lineWidth = 1;
+    const lines = 5;
+    for (let i = 0; i <= lines; i++) {
+      const y = (H / lines) * i;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+      ctx.stroke();
+    }
+
+    // --- candles ---
+    const slot = W / CONFIG.visibleCandles;   // horizontal space per candle
+    const bodyW = Math.max(2, slot * 0.6);
+    const crashing = Price.isCrashing();
+
+    for (let i = 0; i < view.length; i++) {
+      const c = view[i];
+      // right-align newest candle to the right edge
+      const cx = W - (view.length - i) * slot + slot / 2;
+
+      const up = c.close >= c.open;
+      // green when rising, red when falling; whole chart leans red during a crash
+      let col;
+      if (crashing) col = up ? "#ff6b60" : "#ff3b30";
+      else          col = up ? "#33ff66" : "#ff3b30";
+      ctx.strokeStyle = col;
+      ctx.fillStyle = col;
+
+      // wick (the thin high-low line)
+      ctx.lineWidth = Math.max(1, bodyW * 0.14);
+      ctx.beginPath();
+      ctx.moveTo(cx, yOf(c.high));
+      ctx.lineTo(cx, yOf(c.low));
+      ctx.stroke();
+
+      // body (open-to-close rectangle)
+      const yOpen = yOf(c.open);
+      const yClose = yOf(c.close);
+      const top = Math.min(yOpen, yClose);
+      const bh = Math.max(2, Math.abs(yClose - yOpen));
+      ctx.fillRect(cx - bodyW / 2, top, bodyW, bh);
+    }
+
+    // --- glowing line tracing the closes, for a phosphor-trail look ---
+    ctx.strokeStyle = crashing ? "rgba(255,107,96,0.55)" : "rgba(51,255,102,0.45)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < view.length; i++) {
+      const cx = W - (view.length - i) * slot + slot / 2;
+      const y = yOf(view[i].close);
+      if (i === 0) ctx.moveTo(cx, y); else ctx.lineTo(cx, y);
+    }
+    ctx.stroke();
+  }
+
+  /* ---------- The small frozen chart on the RESULT screen ----------
+     Shows the whole run as a line: bright green up to your exit, a red line
+     marking where you sold, then the continuation in dim amber. Drawn on a
+     LOG scale — a run from 1x to 175x on a linear axis would flatten
+     everything before the last few seconds into a straight line on the floor. */
+  const rCanvas = document.getElementById("result-chart");
+  const rCtx = rCanvas.getContext("2d");
+
+  function drawResult(outcome) {
+    const pre = outcome.chartPre, post = outcome.chartPost;
+    const exitPrice = outcome.soldAt;
+    const wrap = document.getElementById("result-chart-wrap");
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    if (!w || !h) return;                       // view not visible yet
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    rCanvas.width = Math.floor(w * dpr);
+    rCanvas.height = Math.floor(h * dpr);
+    rCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    rCtx.clearRect(0, 0, w, h);
+
+    const all = pre.concat(post);
+    if (all.length < 2) return;
+
+    // Vertical range, in log space, padded a little top and bottom.
+    let lo = Infinity, hi = -Infinity;
+    for (const c of all) { if (c.low < lo) lo = c.low; if (c.high > hi) hi = c.high; }
+    lo = Math.max(0.05, lo);
+    hi = Math.max(hi, lo * 1.05);
+    const lLo = Math.log(lo), lHi = Math.log(hi);
+    const padY = (lHi - lLo) * 0.12;
+    const yLo = lLo - padY, yHi = lHi + padY;
+
+    const yOf = (p) => h - ((Math.log(Math.max(0.05, p)) - yLo) / (yHi - yLo)) * h;
+
+    // Horizontal layout. The run and the continuation each get a share of the
+    // width; the continuation's share is floored by resultContMinWidth so a
+    // short climb is still readable. See that setting's note in CONFIG.
+    const postShare = post.length === 0 ? 0
+      : Math.max(CONFIG.resultContMinWidth, post.length / all.length);
+    const preW = w * (1 - postShare);
+    const xOf = (i) => i < pre.length
+      ? (pre.length < 2 ? 0 : (i / (pre.length - 1)) * preW)
+      : preW + ((i - pre.length + 1) / post.length) * (w - preW);
+
+    const exitX = xOf(pre.length - 1);
+    const exitY = yOf(exitPrice);
+
+    // --- faint fill under the continuation, so the missed shape has body ---
+    if (post.length > 0) {
+      rCtx.beginPath();
+      rCtx.moveTo(exitX, exitY);
+      for (let i = 0; i < post.length; i++) rCtx.lineTo(xOf(pre.length + i), yOf(post[i].close));
+      rCtx.lineTo(xOf(all.length - 1), h);
+      rCtx.lineTo(exitX, h);
+      rCtx.closePath();
+      rCtx.fillStyle = "rgba(51,255,102,0.07)";
+      rCtx.fill();
+    }
+
+    // Collapse the run to one high/low pair per pixel column before drawing.
+    // A long run puts several candles in every pixel, and stroking all of them
+    // piles overlapping segments into a muddy band that swallows the shape of a
+    // crash. Keeping each column's extremes draws the true top and bottom of
+    // whatever happened there, so a big fall stays a big fall however few
+    // candles it took.
+    function columnPoints(candleList, indexOffset) {
+      const pts = [];
+      let col = null, colX = 0, lo = 0, hi = 0, loI = 0, hiI = 0;
+      const flush = () => {
+        if (col === null) return;
+        // emit the two extremes in the order they actually happened
+        if (loI <= hiI) pts.push([colX, yOf(lo)], [colX, yOf(hi)]);
+        else            pts.push([colX, yOf(hi)], [colX, yOf(lo)]);
+      };
+      for (let i = 0; i < candleList.length; i++) {
+        const x = xOf(indexOffset + i);
+        const c = Math.round(x);
+        const v = candleList[i].close;
+        if (c !== col) { flush(); col = c; colX = x; lo = hi = v; loI = hiI = i; }
+        else {
+          if (v < lo) { lo = v; loI = i; }
+          if (v > hi) { hi = v; hiI = i; }
+        }
+      }
+      flush();
+      return pts;
+    }
+
+    function strokePoints(pts) {
+      if (pts.length === 0) return;
+      rCtx.beginPath();
+      rCtx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) rCtx.lineTo(pts[i][0], pts[i][1]);
+      rCtx.stroke();
+    }
+
+    // Aggregate the run into one bar per pixel column, keeping the real high and
+    // low of everything that happened there — the same information the live chart
+    // draws as candles, just at one candle per pixel. A whole run is far wider
+    // than the chart (a 440-candle run into ~220px), so a 15-candle crash that
+    // filled a quarter of the live screen lands here only about 7px wide. Drawn
+    // as a plain line it reads as a nick in a green squiggle; drawn as a bar
+    // silhouette it keeps its body.
+    function columnBars(candleList, indexOffset) {
+      const bars = [];
+      let col = null, cur = null, prevClose = candleList.length ? candleList[0].open : 0;
+      for (let i = 0; i < candleList.length; i++) {
+        const k = candleList[i];
+        const c = Math.round(xOf(indexOffset + i));
+        if (c !== col) {
+          if (cur) { prevClose = cur.close; bars.push(cur); }
+          col = c;
+          // stretch each bar to meet the previous column's close so the
+          // silhouette is continuous and never shows a gap at a fast move
+          cur = { x: c, high: Math.max(k.high, prevClose), low: Math.min(k.low, prevClose),
+                  close: k.close };
+        } else {
+          if (k.high > cur.high) cur.high = k.high;
+          if (k.low  < cur.low)  cur.low  = k.low;
+          cur.close = k.close;
+        }
+      }
+      if (cur) bars.push(cur);
+      return bars;
+    }
+
+    // --- the run you actually played ---
+    // A column is drawn red when the price is actively FALLING through it —
+    // more than FALL_TO_GO_RED down across the last LOOKBACK columns. Without a
+    // colour cue every crash is the same phosphor green as the climb and the eye
+    // slides straight over it, which is how a 66% fall could be sitting on the
+    // chart and still read as a smooth climb. Matching the live chart, red marks
+    // the fall itself and stops the moment the price turns back up — colouring
+    // everything below the run's high instead paints most of the chart red,
+    // because the slow climb out of a crash is spent under the old high.
+    const LOOKBACK = 3;             // columns to measure the fall over
+    const FALL_TO_GO_RED = 0.06;    // 6% down across those columns
+    const bars = columnBars(pre, 0);
+    rCtx.lineWidth = 1.4;
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i];
+      const ref = bars[Math.max(0, i - LOOKBACK)].close;
+      const falling = b.close / ref - 1 < -FALL_TO_GO_RED;
+      rCtx.strokeStyle = falling ? "#ff3b30" : "#33ff66";
+      rCtx.beginPath();
+      rCtx.moveTo(b.x + 0.5, yOf(b.high));
+      rCtx.lineTo(b.x + 0.5, yOf(b.low));
+      rCtx.stroke();
+    }
+
+    // --- the climb you missed: same green, dimmed right down ---
+    if (post.length > 0) {
+      rCtx.strokeStyle = "rgba(51,255,102,0.42)";
+      rCtx.lineWidth = 1.6;
+      strokePoints([[exitX, exitY]].concat(columnPoints(post, pre.length)));
+    }
+
+    // --- a faint level line at your exit price, so the gap above it reads ---
+    rCtx.strokeStyle = "rgba(255,59,48,0.35)";
+    rCtx.lineWidth = 1;
+    rCtx.setLineDash([3, 4]);
+    rCtx.beginPath();
+    rCtx.moveTo(0, exitY);
+    rCtx.lineTo(w, exitY);
+    rCtx.stroke();
+    rCtx.setLineDash([]);
+
+    // --- the exit itself: a solid red line straight down the chart ---
+    rCtx.strokeStyle = "#ff3b30";
+    rCtx.lineWidth = 1.5;
+    rCtx.beginPath();
+    rCtx.moveTo(exitX, 0);
+    rCtx.lineTo(exitX, h);
+    rCtx.stroke();
+    rCtx.fillStyle = "#ff3b30";
+    rCtx.fillRect(exitX - 2.5, exitY - 2.5, 5, 5);
+
+    rCtx.font = '8px "Press Start 2P", monospace';
+    rCtx.textBaseline = "alphabetic";
+
+    // "SOLD 17.62x" — to the left of the exit line, or the right if there
+    // isn't room (a very short run puts the exit near the left edge).
+    const soldLabel = "SOLD " + fmtX(exitPrice);
+    const soldW = rCtx.measureText(soldLabel).width;
+    const soldX = exitX - soldW - 4 >= 2 ? exitX - soldW - 4 : exitX + 4;
+    rCtx.fillStyle = "#ff3b30";
+    rCtx.fillText(soldLabel, soldX, exitY < 16 ? exitY + 13 : exitY - 5);
+
+    // --- the peak it reached, marked in amber ---
+    if (post.length > 0) {
+      // The peak is usually the very last point, which would put the ring half
+      // off the right edge, so keep it just inside.
+      const pkX = Math.min(xOf(pre.length + outcome.peakIndex), w - 4.5);
+      const pkY = yOf(outcome.peak);
+      rCtx.strokeStyle = "#ffb000";
+      rCtx.lineWidth = 1.5;
+      rCtx.beginPath();
+      rCtx.arc(pkX, pkY, 3.5, 0, Math.PI * 2);
+      rCtx.stroke();
+
+      // label sits left of the peak so it can't run off the right edge
+      const pkLabel = fmtX(outcome.peak);
+      const pkW = rCtx.measureText(pkLabel).width;
+      rCtx.fillStyle = "#ffb000";
+      rCtx.fillText(pkLabel, Math.max(2, Math.min(pkX - pkW - 6, w - pkW - 2)),
+                    pkY < 14 ? pkY + 14 : pkY - 6);
+    }
+  }
+
+  return { resize, draw, drawResult };
+})();
+
+/* ============================================================
+   GAME STATE + UI  —  ties everything together and drives the loop.
+   ============================================================ */
+const Game = (function () {
+  // Grab all the DOM elements we update.
+  const el = {
+    views:      { attract: document.getElementById("attract"),
+                  game:    document.getElementById("game"),
+                  result:  document.getElementById("result") },
+    multiplier: document.getElementById("multiplier"),
+    drawdown:   document.getElementById("drawdown"),
+    timer:      document.getElementById("timer"),
+    chartWrap:  document.getElementById("chart-wrap"),
+    sell:       document.getElementById("sell"),
+    gameView:   document.getElementById("game"),
+    platePrice: document.getElementById("plate-price"),
+    aHigh:      document.getElementById("a-highscore"),
+    aDraw:      document.getElementById("a-drawdown"),
+    soldAt:     document.getElementById("sold-at"),
+    soldDay:    document.getElementById("sold-day"),
+    wentDay:    document.getElementById("went-day"),
+    wentTo:     document.getElementById("went-to"),
+    flavour:    document.getElementById("flavour"),
+    rDraw:      document.getElementById("r-drawdown"),
+    rNewBest:   document.getElementById("r-newbest"),
+    insert:     document.getElementById("insert"),
+  };
+
+  // Persistent bests, stored in localStorage.
+  const STORE_HIGH = "yolo_highscore";
+  const STORE_DD   = "yolo_deepest_dd";
+  let bestScore = parseFloat(localStorage.getItem(STORE_HIGH)) || 1.0;
+  let bestDD    = parseFloat(localStorage.getItem(STORE_DD))   || 0.0;
+
+  // "attract" = title screen
+  // "game"    = a run is live, SELL is armed
+  // "reveal"  = you sold; chart is still on screen climbing without you (3s)
+  // "result"  = the verdict screen
+  let state = "attract";
+  let candleTimer = null;         // interval that ticks new candles
+  let rafId = null;               // animation frame for smooth redraws
+  let runStart = 0;               // when the current run began
+  let wasCrashing = false;        // to detect crash start/stop transitions
+  let lastOutcome = null;         // kept so the result chart can be redrawn on resize
+
+  function fmtPct(f) { return Math.round(f * 100) + "%"; }
+
+  // Show one of the three views. `newState` defaults to the view's own name;
+  // the "reveal" state is the exception — it keeps the GAME view on screen so
+  // you can watch the chart carry on without you.
+  function show(viewName, newState) {
+    for (const k in el.views) el.views[k].classList.toggle("active", k === viewName);
+    state = newState || viewName;
+  }
+
+  // ---------- ATTRACT ----------
+  function toAttract() {
+    // clear any leftover reveal styling from the previous run
+    el.gameView.classList.remove("revealing");
+    el.multiplier.classList.remove("revealing");
+    show("attract");
+    el.aHigh.textContent = fmtX(bestScore);
+    el.aDraw.textContent = fmtPct(bestDD);
+  }
+
+  // ---------- START A RUN ----------
+  function startRun() {
+    Sound.unlock();
+    Sound.coin();
+    Price.reset();
+    runStart = performance.now();
+    wasCrashing = false;
+    // Show the view FIRST — the canvas can only measure itself once it's visible.
+    show("game");
+    Renderer.resize();
+    updateHud(0);
+
+    // Tick a new candle on a fixed interval.
+    candleTimer = setInterval(onCandle, CONFIG.candleMs);
+    // Redraw continuously so the shake/glow feel smooth.
+    loop();
+  }
+
+  // Called every CONFIG.candleMs — advances the price engine one candle.
+  function onCandle() {
+    Price.step();
+
+    const crashing = Price.isCrashing();
+
+    // Detect the moment a crash STARTS to kick off shake + red flash.
+    if (crashing && !wasCrashing) {
+      el.chartWrap.classList.add("shake");
+      el.multiplier.classList.add("crashing");
+      el.sell.classList.add("tempting");
+    }
+    // Detect the moment a crash ENDS to clear those effects.
+    if (!crashing && wasCrashing) {
+      el.chartWrap.classList.remove("shake");
+      el.multiplier.classList.remove("crashing");
+      el.sell.classList.remove("tempting");
+    }
+    wasCrashing = crashing;
+
+    // Update the readouts here as well as in the render loop, so the numbers
+    // stay correct even if the browser pauses animation (e.g. backgrounded tab).
+    updateHud((performance.now() - runStart) / 1000);
+  }
+
+  // The smooth render loop (runs ~60fps regardless of candle timing).
+  function loop() {
+    Renderer.draw();
+    if (state === "game") {
+      updateHud((performance.now() - runStart) / 1000);
+      rafId = requestAnimationFrame(loop);
+    } else {
+      rafId = null;
+    }
+  }
+
+  // Real seconds you've held -> whole in-game days elapsed.
+  function daysFrom(seconds) { return Math.floor(seconds / CONFIG.secondsPerDay); }
+
+  // How many candles form during one in-game day.
+  function candlesPerDay() { return (CONFIG.secondsPerDay * 1000) / CONFIG.candleMs; }
+
+  function updateHud(seconds) {
+    el.multiplier.textContent = fmtX(Price.getPrice());
+    const dd = Price.getDrawdown();
+    el.drawdown.textContent = "DD " + fmtPct(dd);
+    el.drawdown.classList.toggle("under", dd > 0.001);
+    el.timer.textContent = "DAY " + daysFrom(seconds);
+  }
+
+  // ---------- SELL / END THE RUN ----------
+  function sell() {
+    if (state !== "game") return;
+    Sound.sell();
+
+    // Stop the simulation and the game loop.
+    clearInterval(candleTimer); candleTimer = null;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+
+    // Clear any lingering crash visuals.
+    el.chartWrap.classList.remove("shake");
+    el.multiplier.classList.remove("crashing");
+    el.sell.classList.remove("tempting");
+
+    const soldAt = Price.getPrice();
+    const survivedDD = Price.getDeepestDD();
+    const heldSeconds = (performance.now() - runStart) / 1000;
+
+    // Freeze the HUD on the exact day you sold, so the day shown on the game
+    // screen matches the one on the result screen.
+    updateHud(heldSeconds);
+
+    // Where the chart will "reveal" it went to: a multiple of your exit, but never
+    // past the ceiling the live chart itself obeys. Sell near the cap and there is
+    // genuinely little left on the table — which is the honest thing to show.
+    const factor = CONFIG.cashoutExtraMin + Math.random() * (CONFIG.cashoutExtraMax - CONFIG.cashoutExtraMin);
+    const contTarget = softCeiling(soldAt * factor);
+
+    // Update persistent bests (score = your sell multiplier).
+    let newBest = false;
+    if (soldAt > bestScore) { bestScore = soldAt; localStorage.setItem(STORE_HIGH, bestScore.toFixed(4)); newBest = true; }
+    if (survivedDD > bestDD) { bestDD = survivedDD; localStorage.setItem(STORE_DD, bestDD.toFixed(4)); }
+
+    // The continuation runs a short way past your exit — 10-20% more days —
+    // so the reveal shows a gain that was within reach, not a distant future.
+    const exitDay = daysFrom(heldSeconds);
+    const extraDays = Math.max(1, Math.round(exitDay *
+      (CONFIG.contDaysMin + Math.random() * (CONFIG.contDaysMax - CONFIG.contDaysMin))));
+
+    // Build the climb you missed up front, so the reveal animation and the
+    // result chart are guaranteed to show the same shape. One candle forms
+    // every CONFIG.candleMs, so this many candles cover those extra days.
+    const contCandles = Math.max(6, Math.round(extraDays * candlesPerDay()));
+    const path = Price.makeContinuation(soldAt, contTarget, contCandles);
+
+    // The top it actually reached, and the day it got there. Read from the
+    // generated path rather than assumed, so the marked peak on the chart and
+    // the "IT WENT TO" number can never disagree.
+    let peak = soldAt, peakIndex = 0;
+    for (let i = 0; i < path.length; i++) {
+      if (path[i].close > peak) { peak = path[i].close; peakIndex = i; }
+    }
+
+    // Everything the reveal and result screens need, in one bundle.
+    runReveal({
+      soldAt: soldAt,
+      peak: peak,
+      peakIndex: peakIndex,
+      survivedDD: survivedDD,
+      newBest: newBest,
+      heldDays: exitDay,
+      peakDay: exitDay + Math.max(1, Math.round((peakIndex + 1) / candlesPerDay())),
+      // The run so far, frozen — the result chart draws this in green.
+      chartPre: Price.getHistory().slice(),
+      chartPost: path,
+    });
+  }
+
+  // ---------- THE REVEAL: 3 seconds of watching it climb without you ----------
+  // We deliberately STAY on the game screen for this, so the chart is still
+  // full-size and visible. The SELL button is swapped for a "SOLD AT" plate
+  // and the big readout keeps counting up in amber.
+  function runReveal(outcome) {
+    show("game", "reveal");
+    el.gameView.classList.add("revealing");
+    el.multiplier.classList.add("revealing");
+    el.platePrice.textContent = fmtX(outcome.soldAt);
+
+    const startTime = performance.now();
+    const path = outcome.chartPost;
+    let pushed = 0;
+    let highestSoFar = outcome.soldAt;
+
+    function climb() {
+      if (state !== "reveal") return;        // player bailed to attract somehow
+      const t = Math.min(1, (performance.now() - startTime) / CONFIG.cashoutAnimMs);
+      // ease-out so it rockets away then settles
+      const eased = 1 - Math.pow(1 - t, 2);
+
+      // Feed the pre-built path into the chart in step with the animation.
+      const want = Math.round(eased * path.length);
+      while (pushed < want) {
+        const candle = path[pushed];
+        Price._pushCandle(candle);
+        if (candle.close > highestSoFar) highestSoFar = candle.close;
+        pushed++;
+      }
+
+      Renderer.draw();
+      // Show the highest it has reached, so the readout finishes on the same
+      // peak the result screen is about to report.
+      el.multiplier.textContent = fmtX(highestSoFar);
+
+      if (t < 1) {
+        requestAnimationFrame(climb);
+      } else {
+        showResult(outcome);
+      }
+    }
+    requestAnimationFrame(climb);
+  }
+
+  // ---------- RESULT SCREEN ----------
+  function showResult(outcome) {
+    el.gameView.classList.remove("revealing");
+    el.multiplier.classList.remove("revealing");
+    show("result");
+    el.soldAt.textContent = fmtX(outcome.soldAt);
+    el.wentTo.textContent = fmtX(outcome.peak);
+    el.soldDay.textContent = "on DAY " + outcome.heldDays;
+    el.wentDay.textContent = "by DAY " + outcome.peakDay;
+    el.flavour.textContent = FLAVOUR[Math.floor(Math.random() * FLAVOUR.length)];
+    el.rDraw.textContent = fmtPct(outcome.survivedDD);
+    el.rNewBest.style.visibility = outcome.newBest ? "visible" : "hidden";
+
+    // Freeze the chart above: your run in green, your exit marked in red,
+    // and the climb you missed carrying on in amber.
+    lastOutcome = outcome;
+    Renderer.drawResult(outcome);
+  }
+
+  // ---------- INPUT WIRING ----------
+  function wire() {
+    // Attract screen: any click or key starts a run.
+    el.views.attract.addEventListener("click", () => { if (state === "attract") startRun(); });
+
+    // The SELL button.
+    el.sell.addEventListener("click", (e) => { e.stopPropagation(); sell(); });
+
+    // Result screen: the INSERT button goes back to attract.
+    el.insert.addEventListener("click", (e) => { e.stopPropagation(); toAttract(); });
+
+    // Keyboard: space/enter/any key behaves per screen.
+    // (Nothing is bound during "reveal" — you have to watch it.)
+    window.addEventListener("keydown", (e) => {
+      // ignore bare modifier taps so Alt-Tab etc. doesn't insert a coin
+      if (["Shift","Control","Alt","Meta","Tab"].includes(e.key)) return;
+      if (state === "attract") { startRun(); }
+      else if (state === "game") {
+        if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); sell(); }
+      } else if (state === "result") {
+        if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); toAttract(); }
+      }
+    });
+
+    // Keep the canvases sized to the screen on resize / rotate.
+    window.addEventListener("resize", () => {
+      Renderer.resize();
+      Renderer.draw();
+      // the frozen result chart doesn't animate, so redraw it by hand
+      if (state === "result" && lastOutcome) Renderer.drawResult(lastOutcome);
+    });
+  }
+
+  // ---------- BOOT ----------
+  function init() {
+    wire();
+    Renderer.resize();
+    toAttract();
+  }
+
+  return { init };
+})();
+
+// Start everything once the DOM is ready.
+Game.init();
+</script>
+</body>
+</html>
